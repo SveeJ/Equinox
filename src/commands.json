@@ -1,0 +1,26 @@
+[
+    {
+        "name": "register",
+        "description": "Links your Discord account to a Minecraft account, verifying your ownership of it.",
+        "options": [
+            {
+                "name": "IGN",
+                "description": "The username of the Minecraft account to verify as yours.",
+                "type": 3,
+                "required": true
+            }
+        ]
+    },
+    {
+        "name": "info",
+        "description": "View the stats of another registered player.",
+        "options": [
+            {
+                "name": "player",
+                "description": "The player you'd like to lookup.",
+                "type": 6,
+                "required": true
+            }
+        ]
+    }
+]
