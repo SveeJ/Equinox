@@ -1,5 +1,5 @@
 {
-  "name": "@rbw/bot",
+  "name": "@equinox/bot",
   "version": "1.0.0",
   "description": "Ranked Bedwars discord bot",
   "main": "dist/index.js",
@@ -10,7 +10,7 @@
     "watch": "tsc -w"
   },
   "keywords": [],
-  "author": "RankedBedwars",
+  "author": "Equinox",
   "license": "ISC",
   "devDependencies": {
     "@types/mongodb": "^3.6.3",

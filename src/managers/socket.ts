@@ -2,12 +2,11 @@ import { Collection, TextChannel } from "discord.js";
 import { createServer } from "http";
 import { ObjectId } from "mongodb";
 import { Server, Socket } from "socket.io";
-import { Constants } from "../constants";
 import Logger from "../logger";
 import { GameState } from "../typings/games";
 import type { Player } from "../typings/players";
 import type { SocketAPI } from "../typings/socket";
-import { activeGames, BotManager, gameReport, HerrsELO, Players, updateRoles } from "../utils";
+import { activeGames, BotManager, gameReport, Players } from "../utils";
 import { defaultGuild } from "./bot";
 import database from "./database";
 
@@ -72,12 +71,7 @@ io.use((socket, next) => {
         return logger.warn(`Received gameFinish event from bot ${bot} that is not currently bound to game ${game.id} which is not currently open to scoring modifications. Ignoring invocation.`);
         
         try {
-            const ws = [...game.teams[0]!.players.map(player => player.winstreak), ...game.teams[1]!.players.map(player => player.winstreak)];
-            const bs = [...game.teams[0]!.players.map(player => player.bedstreak), ...game.teams[1]!.players.map(player => player.bedstreak)];
-            const ratings = [...game.teamPlayers[0]!.map(player => player.elo), ...game.teamPlayers[1]!.map(player => player.elo)];
-            const gameKills = players.map(({ minecraft, kills }) => (kills ?? 1) - (game.getFullPlayer(minecraft.name)?.kills ?? 1));
             const result = (players[0].wins ?? 0) - game.teamPlayers[0]![0].wins;
-            const newElos = HerrsELO(ratings, gameKills, ws, bs, result === 1 ? 1 : 0, 64);
             const comparisonPoint = result === 1 ? 0:players.length/2;
             const bedBreakers = players.filter(p => p.bedstreak !== 0).map(player => player.discord);
             let indexes: number[] = [];
@@ -85,32 +79,6 @@ io.use((socket, next) => {
                 indexes.push(players.map(p => p.discord).indexOf(bb));
             })
 
-            newElos.forEach((elo, index) => {
-                if(elo <= 10 && index >= comparisonPoint && index < comparisonPoint + players.length/2) {
-                    while(elo <= 10) {
-                        elo += Math.round((5000 - ratings[index])/300);
-                    }
-                }
-                else if(elo >= 0 && (index >= comparisonPoint + players.length/2 || index < comparisonPoint)) {
-                    while(elo >= 0) {
-                        elo -= Math.round((5000 - ratings[index])/300);
-                    }
-                }
-
-                if(indexes.includes(index)) {
-                    elo += 10;
-                }
-
-                const { i, teamId } = index < (players.length / 2) ? { i: index, teamId: 0 } : { i: index - (players.length / 2), teamId: 1 };
-                game.teams[teamId]!.players[i].elo = elo - ratings[index];
-                newElos[index] = elo;
-            })
-
-            for(let i in players){
-                players[i].elo = newElos[i] + (players[i].elo ?? 0);
-                if(players[i].elo! < 0) players[i].elo = 0;
-                (await defaultGuild).members.cache.get(players[i].discord)?.setNickname(`[${players[i].elo}] ${players[i].minecraft.name}`).catch(_ => null);
-            }
             const db = await database;
             const _players = db.players.initializeUnorderedBulkOp();
 
@@ -128,22 +96,6 @@ io.use((socket, next) => {
                 p.kills = (players[i].kills ?? 1) - game.teamPlayers[teamId]![i].kills;
                 p.deaths = (players[i].deaths ?? 0) - game.teamPlayers[teamId]![i].deaths;
                 p.destroyedBed = players[i].bedsBroken !== game.teamPlayers[teamId]![i].bedsBroken;
-
-                // | IGN: | Kills: | Deaths: | Beds: | KDR: | `[oldElo --> newElo] [oldRank --> newRank]`
-                const roleNotToBeUpdated = getRole(ratings[_i]) === getRole(ratings[_i] + newElos[_i]);
-                let roleUpdate = roleNotToBeUpdated ? '':`| <@&${getRole(ratings[_i])}> → <@&${getRole(ratings[_i] + newElos[_i])}> `
-                let score = `**${p.username}** | \`[${ratings[_i]} → ${ratings[_i] + newElos[_i]}]\` ${roleUpdate}\n`;
-
-                if(!roleNotToBeUpdated) {
-                    updateRoles(player.discord, getRole(ratings[_i]), getRole(ratings[_i] + newElos[_i]));
-                }
-
-                if(_i < (players.length / 2)) {
-                    team1scores += score;
-                }
-                else {
-                    team2scores += score;
-                }
 
                 _players.find({ "minecraft.name": player.minecraft.name }).replaceOne(player);
             });
@@ -186,9 +138,5 @@ io.use((socket, next) => {
 server.listen(port, () => {
     logger.info(`Now listening on port ${port}.`);
 });
-
-function getRole(p: number) {
-    return Constants.ELO_ROLES[Math.floor(Math.abs(p)/100)];
-}
 
 export default io;

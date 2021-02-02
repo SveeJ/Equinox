@@ -16,12 +16,13 @@ export default new Promise<Database>((res, rej) => {
 
     MongoClient.connect(DB_URL, { useNewUrlParser: true, useUnifiedTopology: true }).then(client => {
 
-        const db = client.db("rbw");
+        const db = client.db("equinox");
 
         res({
             bots: db.collection("bots"),
             games: db.collection("games"),
             players: db.collection("players"),
+            tournaments: db.collection("tournaments"),
         });
 
     }).catch(rej);

@@ -40,19 +40,6 @@ export interface Team {
     players: GamePlayer[];
 }
 
-export interface gameMember {
-    ids: string[];
-    time: number;
-}
-
-export interface strikeCheck {
-    textChannelID: string;
-    timeOfLastPick: number;
-    pickingOver: boolean;
-    voiceChannelID: string;
-    members: string[];
-}
-
 export enum GameState {
     PRE_GAME,
     STARTING,

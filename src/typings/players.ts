@@ -26,14 +26,8 @@ export interface Player {
     kills?: number;
     /** Deaths this player has gotten. */
     deaths?: number;
-    /** Player ELO. */
-    elo?: number;
     /** Player Roles. */
     roles?: string[];
-    /** Time ranked ban expires. */
-    banExpires?: number;
-    /** Player Strikes. */
-    strikes?: number;
     /** Total games played. Defaults to 1. */
     games?: number;
     /** Current winstreak of the player. */

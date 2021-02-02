@@ -1,11 +1,12 @@
 import { CategoryChannel, Collection, GuildMember, MessageEmbed, MessageReaction, TextChannel, User, VoiceChannel } from "discord.js";
-import { ObjectID, ObjectId, UpdateOneOptions, UpdateQuery } from "mongodb";
+import { ObjectId, UpdateOneOptions, UpdateQuery } from "mongodb";
 import { Constants } from "./constants";
 import Logger from "./logger";
-import bot, { defaultGuild } from "./managers/bot";
+import { defaultGuild } from "./managers/bot";
 import database from "./managers/database";
 import { Game as _Game, GamePlayer, GameState, Team } from "./typings/games";
 import type { Player as _Player } from "./typings/players";
+import type { Tournament as _Tournament } from "./typings/tournaments";
 const { HYPIXEL_KEY } = process.env;
 import fetch from "node-fetch";
 import { bots, devLogger } from "./managers/socket";
@@ -54,10 +55,6 @@ export class Player {
         return this.data.losses ?? 0;
     }
 
-    get elo(){
-        return this.data.elo ?? 0;
-    }
-
     get kills(){
         return this.data.kills ?? 0;
     }
@@ -76,19 +73,6 @@ export class Player {
 
     get roles() {
         return this.data.roles ?? [];
-    }
-
-    get banExpires() {
-        return this.data.banExpires ?? 0;
-    }
-
-    /** Get if the player is currently banned. */
-    get banned(){
-        return this.banExpires < 0 || this.banExpires >= Date.now();
-    }
-
-    get strikes() {
-        return this.data.strikes ?? 0;
     }
 
     get games() {
@@ -112,74 +96,13 @@ export class Player {
         return this;
     }
 
-    async ban(duration = -1){
-        if(this.banned && ((this.banExpires - Date.now())) + duration < 0) this.data = (await (await database).players.findOneAndUpdate({ _id: this._id }, {
-            $set: {
-                banExpires: 0,
-            },
-        }, {
-            upsert: true,
-        })).value!;
-        else if(duration === -1) this.data = (await (await database).players.findOneAndUpdate({ _id: this._id }, {
-            $set: {
-                banExpires: -1,
-            },
-        }, {
-            upsert: true,
-        })).value!;
-        else {
-            if(this.banned) this.data = (await (await database).players.findOneAndUpdate({ _id: this._id }, {
-                $inc: {
-                    banExpires: duration,
-                },
-            }, {
-                upsert: true,
-            })).value!;
-            else this.data = (await (await database).players.findOneAndUpdate({ _id: this._id }, {
-                $set: {
-                    banExpires: Date.now() + duration,
-                },
-            }, {
-                upsert: true,
-            })).value!;
-        }
-        return this;
-    }
-
-    async unban(){
-        this.data = (await (await database).players.findOneAndUpdate({ _id: this._id }, {
-            $unset: {
-                banExpires: ""
-            },
-        }, {
-            upsert: true,
-        })).value!;
-        return this;
-    }
-
     toGamePlayer(): GamePlayer {
         return { username: this.minecraft.name, winstreak: this.winstreak, bedstreak: this.bedstreak };
     }
 
     toJSON(): _Player {
-        return { _id: this._id, discord: this.discord, minecraft: this.minecraft, registeredAt: this.registeredAt, banExpires: this.banExpires, bedsBroken: this.bedsBroken, bedsLost: this.bedsLost, bedstreak: this.bedstreak, deaths: this.deaths, elo: this.elo, games: this.games, kills: this.kills, losses: this.losses, roles: this.roles, strikes: this.strikes, wins: this.wins, winstreak: this.winstreak };
+        return { _id: this._id, discord: this.discord, minecraft: this.minecraft, registeredAt: this.registeredAt, bedsBroken: this.bedsBroken, bedsLost: this.bedsLost, bedstreak: this.bedstreak, deaths: this.deaths, games: this.games, kills: this.kills, losses: this.losses, roles: this.roles, wins: this.wins, winstreak: this.winstreak };
     }
-
-    async strikeELO(mode: string) {
-
-        let rate = 1;
-
-        if(mode === 'Strike') {
-            rate = this.elo < 1200 ? 0.975 : 0.9875;
-        }
-        else if(mode === 'Unstrike') {
-            rate = this.elo < 1200 ? 1.025 : 1.0125;
-        }
-        
-        await this.update({ elo: Math.round(this.elo * rate) });
-        return Math.round(this.elo * rate);
-    }
-
 }
 
 /** Ways to fetch player data.  */
@@ -280,41 +203,53 @@ export class Game {
 
 }
 
-// I'm dedicating this function in the src code of the bot to HerrStahly. Assume all arrays taken in are in order of P0 to P7 
-// where P0 to P3 are Team 1 players and P4 to P7 are Team 2 players and S is the outcome of the game relative to Team 1
+export class Tournament {
 
-export function HerrsELO(currentRatings: number[], gameKills: number[], currentWinstreaks: number[], currentBedstreaks: number[], S: number, kFactor: number) {
+    constructor(private data: _Tournament){};
 
-    const { length } = currentRatings;
-
-    let meanKills = sum(gameKills, 0, (length - 1)) / length;
-    if(meanKills === 0) {
-        meanKills = 1;
+    get _id(){
+        return this.data._id;
     }
-    const relativeLBPos = gameKills.map(k => relLBPos(k/meanKills));
+
+    get manager() {
+        return this.data.manager;
+    }
+
+    get registration() {
+        return this.data.registration;
+    }
+
+    get createdAt() {
+        return this.data.createdAt;
+    }
+
+    get name() {
+        return this.data.name;
+    }
     
-    const teamTotal1 = sum(currentRatings, 0, (length / 2) - 1);
-    const teamTotal2 = sum(currentRatings, length / 2, length - 1);
-  
-    const WSIndex = currentWinstreaks.map(ws => getStreak(ws));
-    const BSIndex = currentBedstreaks.map(bs => getStreak(bs));
-  
-    const estimatedTeamOutcomes = getOutcomes(length, teamTotal1, teamTotal2) as number[];
-    const estimatedLBPos = currentRatings.map(r => getOutcomes(length, teamTotal1, teamTotal2, r)) as number[];
-  
-    return [...currentRatings.slice(0, length / 2).map((r, index) => Math.round(kFactor*(S - estimatedTeamOutcomes[0]) + 
-    0.5*kFactor*(relativeLBPos[index] - estimatedLBPos[index]) + S*kFactor*WSIndex[index] +     
-    kFactor*BSIndex[index])), ...currentRatings.slice(length / 2).map((r, index) => Math.round(kFactor*((1 - S) -   
-    estimatedTeamOutcomes[1]) + 0.5*kFactor*(relativeLBPos[index + (length / 2)] - estimatedLBPos[index + (length / 2)]) + (1 - S)*
-    kFactor*WSIndex[index + (length / 2)] + kFactor*BSIndex[index + (length / 2)]))];
-  }
-  
-function relLBPos(ratio: number) {
-    if(ratio <= 1) {
-      return 0.5*ratio;
+    get teams() {
+        return this.data.teams;
     }
-    else {
-      return 0.5*(1/((1/3) + 1.1*Math.exp(1 - 1.5*ratio)))
+
+    get number_of_players() {
+        return this.data.number_of_players;
+    }
+
+    get teamIndex() {
+        return this.data.teamIndex;
+    }
+
+    get registered() {
+        return this.data.registered;
+    }
+
+    async update(data: Partial<_Tournament>){
+        this.data = (await (await database).tournaments.findOneAndUpdate({ _id: this._id }, {
+            $set: data,
+        }, {
+            upsert: true,
+        })).value!;
+        return this;
     }
 }
   
@@ -327,17 +262,6 @@ function sum(arr: number[], start: number, end: number) {
     }
   
     return tot;
-}
-  
-function getStreak(streak: number) {
-    return streak <= 1? 0 : streak <= 10? streak/9 - 1/9 : 1;
-}
-
-function getOutcomes(length: number, team1Tot: number, team2Tot: number, r?: number) {
-    if(r !== undefined) {
-        return 1/(1 + 10**(((team1Tot + team2Tot)/length - r)/400));
-    }
-    return [1/(1 + 10**((team2Tot - team1Tot)/400)), 1/(1 + 10**((team1Tot - team2Tot)/400))];
 }
 
 export class LocalGame {
@@ -545,7 +469,7 @@ export class LocalGame {
         return new Promise(async (res, rej) => { 
             const reject = () => rej(new Error("MESSAGE_DELETED"));
             const playerCount = (this.team1Players?.length ?? 0) + (this.team2Players?.length ?? 0);
-            let maps = Object.keys(maps_object), firstMap: string, secondMap: string, pick, rankedlogo = "https://cdn.discordapp.com/attachments/759444475818278942/805517822360027146/rbw_white_logo.jpg";
+            let maps = Object.keys(maps_object), firstMap: string, secondMap: string, pick, rankedlogo = Constants.BRANDING_URL;
 
             firstMap = maps[Math.floor(Math.random() * maps.length)];
             maps = maps.filter(map => map !== firstMap);
