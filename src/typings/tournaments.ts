@@ -22,8 +22,12 @@ export interface Tournament {
 }
 
 export interface TournamentTeam {
+    /** Team Name */
+    teamName: string;
     /** Team Members */
     teamMembers: string[];
     /** Team ID */
     teamID: number;
+    /** Challonge ID */
+    challongeID: number;
 }

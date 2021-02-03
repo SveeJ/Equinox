@@ -36,6 +36,13 @@ const constants_1 = require("./constants");
 const utils_1 = require("./utils");
 const socket_1 = require("./managers/socket");
 const mongodb_1 = require("mongodb");
+const challonge_ts_1 = require("challonge-ts");
+require("domain");
+const API_KEY = process.env.API_KEY;
+if (!API_KEY) {
+    logger.error("NO API KEY DEFINED");
+    process.exit(1);
+}
 !async function () {
     const [db, client, guild] = await Promise.all([database_1.default, bot_1.default, bot_1.defaultGuild]).catch(err => {
         logger.error(`Startup failed:\n${err.stack}`);
@@ -289,6 +296,8 @@ const mongodb_1 = require("mongodb");
                 if (msg_arr.length !== 3)
                     return message.reply(createEmbed(`Invalid Usage. Please use format \`=create name [number of players]\` to create a new tournament.`, "RED"));
                 const name = msg_arr[1];
+                if (name.length > 50)
+                    return message.reply(createEmbed(`Invalid Usage. Tournament lengths cannot be over 50 characters.`, "RED"));
                 const number_of_players = parseInt(msg_arr[2]);
                 if (Number.isNaN(number_of_players) || number_of_players > 4 || number_of_players <= 0) {
                     return message.reply(createEmbed("Number of players must be a positive Integer <= 4", "RED"));
@@ -337,6 +346,16 @@ const mongodb_1 = require("mongodb");
                 }, {
                     "upsert": true
                 });
+                const data = await challonge_ts_1.TournamentAdapter.create(API_KEY, {
+                    "tournament": {
+                        "name": name,
+                        "url": `equinox_${name}`,
+                        "open_signup": false,
+                        "private": true,
+                    }
+                });
+                console.log(data);
+                return message.channel.send(`https://challonge.com/equinox_${name}`);
             }
             if (message.content.startsWith('=delete')) {
                 const msg_arr = message.content.split(' ');
@@ -351,6 +370,7 @@ const mongodb_1 = require("mongodb");
                 await db.tournaments.deleteOne({
                     "name": name
                 });
+                await challonge_ts_1.TournamentAdapter.destroy(API_KEY, `equinox_${name}`);
                 message.reply(createEmbed(`Tournament with name ${name} was deleted successfully!`));
                 try {
                     guild.channels.cache.get(tourney.manager)?.delete();
@@ -369,20 +389,36 @@ const mongodb_1 = require("mongodb");
             if (!message.content.startsWith('=team'))
                 return;
             const msg_arr = message.content.split(' ');
+            const indexOfLastMention = msg_arr.slice(1).findIndex(msg => !msg.startsWith('<@'));
+            const errMsg = tournament.number_of_players === 1 ? ' ' : tournament.number_of_players === 2 ? ` @user1 ` : ` @user1...@user${tournament.number_of_players - 1} `;
+            if (indexOfLastMention === -1)
+                return message.reply(createEmbed(`Invalid Usage. Use format \`=team${errMsg}[Team Name]\``, "RED"));
+            const team = msg_arr.slice(indexOfLastMention - msg_arr.length + 1).join(' ');
+            if (tournament.teams.map(team => team.teamName).includes(team))
+                return message.reply(createEmbed(`A team with name ${team} already exists in this tournament.`, "RED"));
             let users = msg_arr.slice(1).map(u => client.users.cache.get(u)).filter(u => u).map(u => u.id);
             if (message.mentions.users.array())
                 users.push(...message.mentions.users.array().map(men => men.id));
             users.push(message.author.id);
             users = [...new Set(users)];
+            const registered = [];
+            tournament?.teams.forEach(team => registered.push(...team.teamMembers));
+            const overlap = [];
+            users.forEach(user => {
+                if (registered.includes(user))
+                    overlap.push(`<@${user}>`);
+            });
+            if (overlap.length > 0)
+                return await message.reply(createEmbed(`The member(s) ${overlap.join(' ')} is/are already in teams. Please contact a staff member if you think this is a mistake.`, "RED"));
             const players = await utils_1.Players.getManyByDiscord(users);
             if (players.array().length !== users.length) {
                 const unregistered = users.filter(user => !players.find(u => u.discord === user));
                 return message.reply(createEmbed(`You cannot team with unregistered users. Please ask ${unregistered.map(un => `<@${un}>`).join(' ')} to register in ${guild.channels.cache.get(constants_1.Constants.REGISTER_CHANNEL)?.toString()} using /register first.`));
             }
             if (users.length !== tournament.number_of_players)
-                return message.reply(createEmbed(`Invalid Usage. Please use format \`=team @user1...@user${tournament.number_of_players - 1}\``, "RED"));
+                return message.reply(createEmbed(`Invalid Usage. Please use format \`=team ${errMsg} [Team Name]\``, "RED"));
             const mess = await message.channel.send(users.map(u => `<@${u}>`).join(' '));
-            await mess.edit(createEmbed(`Team → ${users.map(u => `<@${u}>`).join(' ')}`).setTitle('Team Registration').addField('Created By', `${message.author}`).setColor("YELLOW"))
+            await mess.edit(createEmbed(`Team → ${users.map(u => `<@${u}>`).join(' ')}`).setTitle(`${team} Registration`).addField('Created By', `${message.author}`).setColor("#F6BE00"))
                 .then((msg) => {
                 msg.react('✅')
                     .then(() => {
@@ -408,15 +444,15 @@ const mongodb_1 = require("mongodb");
                             overlap.push(`<@${user}>`);
                     });
                     if (overlap.length > 0)
-                        await r.message.edit(createEmbed(`The member(s) ${overlap.join(' ')} are already in teams. Please contact a staff member if you think this is a mistake.`, "RED"));
+                        await r.message.edit(createEmbed(`The member(s) ${overlap.join(' ')} is/are already in teams. Please contact a staff member if you think this is a mistake.`, "RED"));
                     else {
-                        await r.message.edit(createEmbed(`Team → ${users.map(u => `<@${u}>`).join(' ')}`).setTitle('Team Registration → Pending Staff Approval'));
-                        await guild.channels.cache.get(tournament.registered).send(createEmbed(`Team → ${users.map(u => `<@${u}>`).join(' ')}`).setTitle('Team Registration → Pending Staff Approval'));
+                        await r.message.edit(createEmbed(`Team → ${users.map(u => `<@${u}>`).join(' ')}`).setTitle(`${team} Registration → Pending Staff Approval`));
+                        await guild.channels.cache.get(tournament.registered).send(createEmbed(`Team → ${users.map(u => `<@${u}>`).join(' ')}`).setTitle(`${team} Registration → Pending Staff Approval`));
                     }
                     collector.stop("reacted");
                 }
                 else if (r.count > 1 && r.emoji.name === '❌') {
-                    await r.message.edit(createEmbed(`Team → ${users.map(u => `<@${u}>`).join(' ')}`).setTitle('Team Registration → Unsuccessful').setColor("RED"));
+                    await r.message.edit(createEmbed(`Team → ${users.map(u => `<@${u}>`).join(' ')}`).setTitle(`${team} Registration → Unsuccessful`).setColor("RED"));
                     await r.message.reactions.removeAll();
                     collector.stop("reacted");
                 }
@@ -424,7 +460,7 @@ const mongodb_1 = require("mongodb");
             collector.on('end', async (_collection, reason) => {
                 if (reason === "reacted")
                     return;
-                await mess.edit(createEmbed(`Team → ${users.map(u => `<@${u}>`).join(' ')}`).setTitle('Team Registration → Unsuccessful').setColor("RED"));
+                await mess.edit(createEmbed(`Team → ${users.map(u => `<@${u}>`).join(' ')}`).setTitle(`${team} Registration → Unsuccessful`).setColor("RED"));
             });
             return;
         }
@@ -445,14 +481,15 @@ const mongodb_1 = require("mongodb");
                         "teams": { teamID: id }
                     }
                 });
-                if (!deleted)
-                    return message.reply(createEmbed(`Team with id: ${id} does not exist.`, "RED"));
-                return message.reply(createEmbed(`Team with id: ${id} was deleted successfully!`));
+                if (deleted.modifiedCount === 0) {
+                    return message.reply(createEmbed(`Team with ID: ${id} does not exist.`, "RED"));
+                }
+                challonge_ts_1.ParticipantAdapter.destroy(API_KEY, `equinox_${tourn.name}`, tourn.teams.find(team => team.teamID === id).challongeID);
+                return message.reply(createEmbed(`Team with ID: ${id} was deleted successfully!`));
             }
         }
         const tourney = await db.tournaments.findOne({ "registered": message.channel.id });
         if (tourney !== null && message.author.id === client.user.id && message.embeds.length === 1) {
-            logger.info('I have reached registered.');
             message.react('✅')
                 .then(() => {
                 message.react('❌');
@@ -461,33 +498,54 @@ const mongodb_1 = require("mongodb");
                 return reaction.emoji.name === '✅' || reaction.emoji.name === '❌';
             };
             const collector = message.createReactionCollector(filter, { time: 0 });
+            const name = message.embeds[0].title.split(' ').slice(0)[0];
             collector.on('collect', async (r) => {
                 if (r.count > 1 && r.emoji.name === '✅') {
                     const updatedTourney = await db.tournaments.findOne({ "registered": message.channel.id });
                     if (!updatedTourney)
                         return;
-                    const team = {
-                        "teamID": updatedTourney.teamIndex,
-                        "teamMembers": message.embeds[0].description?.slice(2).split(' ').map(split => split.slice(2, -1)).filter(str => str.length > 0)
-                    };
-                    await message.edit(message.embeds[0].setTitle('Team Registration → Successful').setColor("GREEN"));
-                    await r.message.reactions.removeAll();
-                    await db.tournaments.updateOne({
-                        "registered": message.channel.id
-                    }, {
-                        $push: {
-                            "teams": team
-                        },
-                        $inc: {
-                            "teamIndex": 1
-                        }
-                    }, {
-                        upsert: true
+                    const registered = [];
+                    updatedTourney?.teams.forEach(team => registered.push(...team.teamMembers));
+                    const overlap = [];
+                    const users = message.embeds[0].description?.slice(2).split(' ').map(split => split.slice(2, -1)).filter(str => str.length > 0);
+                    users.forEach(user => {
+                        if (registered.includes(user))
+                            overlap.push(`<@${user}>`);
                     });
+                    if (overlap.length > 0)
+                        await message.edit(createEmbed(`The member(s) ${overlap.join(' ')} is/are already in teams.`, "RED"));
+                    else {
+                        const part = await challonge_ts_1.ParticipantAdapter.create(API_KEY, `equinox_${tourney.name}`, {
+                            "participant": {
+                                "name": name
+                            }
+                        });
+                        const team = {
+                            "teamID": updatedTourney.teamIndex,
+                            "teamMembers": users,
+                            "teamName": name,
+                            "challongeID": part.participant.id,
+                        };
+                        await db.tournaments.updateOne({
+                            "registered": message.channel.id
+                        }, {
+                            $push: {
+                                "teams": team
+                            },
+                            $inc: {
+                                "teamIndex": 1
+                            }
+                        }, {
+                            upsert: true
+                        });
+                        await message.edit(users.map(u => `<@${u}>`).join(' '));
+                        await message.edit(message.embeds[0].setTitle(`${name} Registration → Successful`).setColor("GREEN").setFooter(`© Equinox | Team ID: ${updatedTourney.teamIndex}`));
+                        await r.message.reactions.removeAll();
+                    }
                     collector.stop();
                 }
                 else if (r.count > 1 && r.emoji.name === '❌') {
-                    await message.edit(message.embeds[0].setTitle('Team Registration → Denied').setColor("RED"));
+                    await message.edit(message.embeds[0].setTitle(`${name} Registration → Denied`).setColor("RED"));
                     await r.message.reactions.removeAll();
                     collector.stop();
                 }
