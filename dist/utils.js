@@ -14,6 +14,7 @@ const games_1 = require("./typings/games");
 const { HYPIXEL_KEY } = process.env;
 const node_fetch_1 = __importDefault(require("node-fetch"));
 const socket_1 = require("./managers/socket");
+require("assert");
 const maps_object = {
     "Aquarium": { img: "https://cdn.discordapp.com/attachments/799897234128764958/800008639342575667/aquariumold-png.png", limit: "+110" },
     "Katsu": { img: "https://cdn.discordapp.com/attachments/799897234128764958/800010460429942794/NEW-Katsu-bw-3v3v3v3-4v4v4v4.png", limit: "+96" },
@@ -201,6 +202,9 @@ class Tournament {
     get registered() {
         return this.data.registered;
     }
+    get matches() {
+        return this.data.matches;
+    }
     async update(data) {
         this.data = (await (await database_1.default).tournaments.findOneAndUpdate({ _id: this._id }, {
             $set: data,
@@ -232,9 +236,6 @@ class LocalGame {
     get textChannel() {
         return this._textChannel;
     }
-    get voiceChannel() {
-        return this._voiceChannel;
-    }
     get teams() {
         return [this.team1, this.team2];
     }
@@ -244,7 +245,13 @@ class LocalGame {
     get gameMembers() {
         return this.gamePlayers ?? [];
     }
-    async createChannels(members, vc) {
+    get chID() {
+        return this.challongeID ?? -1;
+    }
+    get URL() {
+        return this.url ?? '';
+    }
+    async createChannels(members) {
         const guild = await bot_1.defaultGuild;
         const [textChannel] = await Promise.all([
             guild.channels.create(`game-${this.gameNumber}`, {
@@ -254,11 +261,15 @@ class LocalGame {
                         id: (await bot_1.defaultGuild).id,
                         deny: ["VIEW_CHANNEL"]
                     }
-                ]
+                ],
+                parent: constants_1.Constants.GAMES_CATEGORY
             })
         ]);
+        for (let i = 0; i < members.length; i++) {
+            const mem = members[i];
+            await textChannel.updateOverwrite(mem, { "VIEW_CHANNEL": true, "READ_MESSAGE_HISTORY": true, "ADD_REACTIONS": true, "ATTACH_FILES": true, "SEND_MESSAGES": true });
+        }
         this._textChannel = textChannel;
-        this._voiceChannel = vc;
         this.gamePlayers = members.map(mem => mem.id);
         return { textChannel };
     }
@@ -396,6 +407,10 @@ class LocalGame {
     setTeamChannels(team1, team2) {
         this.team1Channel = team1;
         this.team2Channel = team2;
+    }
+    setChallongeInfo(matchID, url) {
+        this.challongeID = matchID;
+        this.url = url;
     }
     pickMap() {
         return new Promise(async (res, rej) => {
@@ -743,7 +758,7 @@ function getBanDuration(existingStrikes, strikesToAdd) {
 exports.getBanDuration = getBanDuration;
 async function gameReport(Team1Scores, Team2Scores, gameNumber, winner, users) {
     const ScoringEmbed = new discord_js_1.MessageEmbed()
-        .setAuthor(`Automatic Scoring: Score Request [#${gameNumber}]`, 'https://cdn.discordapp.com/attachments/799897234128764958/804020431576105000/Daco_3568543.png')
+        .setAuthor(`Automatic Scoring: Score Request [#${gameNumber}]`, constants_1.Constants.BRANDING_URL)
         .addField('Team 1', Team1Scores)
         .addField('Team 2', Team2Scores)
         .addField('Winning Team', `\`•\`${winner}`);

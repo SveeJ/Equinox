@@ -10,6 +10,7 @@ import type { Tournament as _Tournament } from "./typings/tournaments";
 const { HYPIXEL_KEY } = process.env;
 import fetch from "node-fetch";
 import { bots, devLogger } from "./managers/socket";
+import { match } from "assert";
 
 interface _Map {
     img: string;
@@ -243,6 +244,10 @@ export class Tournament {
         return this.data.registered;
     }
 
+    get matches() {
+        return this.data.matches;
+    }
+
     async update(data: Partial<_Tournament>){
         this.data = (await (await database).tournaments.findOneAndUpdate({ _id: this._id }, {
             $set: data,
@@ -269,7 +274,6 @@ export class LocalGame {
     public readonly logger = new Logger(`Game #${this.gameNumber}`);
     private gamePlayers?: string[];
     private _textChannel?: TextChannel;
-    private _voiceChannel?: VoiceChannel;
     private _bot?: string;
     private _state = GameState.PRE_GAME;
     private team1?: Team;
@@ -278,6 +282,8 @@ export class LocalGame {
     private team2Players?: Player[];
     private team1Channel?: VoiceChannel;
     private team2Channel?: VoiceChannel;
+    private challongeID?: number;
+    private url?: string;
 
     constructor(public readonly gameNumber: number, public readonly id: ObjectId){};
 
@@ -287,10 +293,6 @@ export class LocalGame {
 
     get textChannel(){
         return this._textChannel;
-    }
-
-    get voiceChannel(){
-        return this._voiceChannel;
     }
 
     get teams(): [ Team | undefined, Team | undefined ] {
@@ -305,7 +307,15 @@ export class LocalGame {
         return this.gamePlayers ?? [];
     }
 
-    async createChannels(members: GuildMember[], vc: VoiceChannel){
+    get chID(){
+        return this.challongeID ?? -1;
+    }
+
+    get URL(){
+        return this.url ?? '';
+    }
+
+    async createChannels(members: GuildMember[]){
         const guild = await defaultGuild;
         const [ textChannel ] = await Promise.all([
             guild.channels.create(`game-${this.gameNumber}`, {
@@ -315,11 +325,17 @@ export class LocalGame {
                         id: (await defaultGuild).id,
                         deny: ["VIEW_CHANNEL"]
                     }
-                ]
+                ],
+                parent: Constants.GAMES_CATEGORY
             })
         ]);
+
+        for(let i = 0; i < members.length; i++) {
+            const mem = members[i];
+            await textChannel.updateOverwrite(mem, { "VIEW_CHANNEL": true, "READ_MESSAGE_HISTORY": true, "ADD_REACTIONS": true, "ATTACH_FILES": true, "SEND_MESSAGES": true })
+        }
+
         this._textChannel = textChannel;
-        this._voiceChannel = vc;
         this.gamePlayers = members.map(mem => mem.id);
         return { textChannel };
     }
@@ -463,6 +479,11 @@ export class LocalGame {
     setTeamChannels(team1: VoiceChannel, team2: VoiceChannel){
         this.team1Channel = team1;
         this.team2Channel = team2;
+    }
+
+    setChallongeInfo(matchID: number, url: string){
+        this.challongeID = matchID;
+        this.url = url;
     }
 
     pickMap(){
@@ -894,7 +915,7 @@ export function getBanDuration(existingStrikes: number, strikesToAdd: number) {
 export async function gameReport(Team1Scores: string, Team2Scores: string, gameNumber: number, winner: string, users: string) {
 
     const ScoringEmbed = new MessageEmbed()
-        .setAuthor(`Automatic Scoring: Score Request [#${gameNumber}]`, 'https://cdn.discordapp.com/attachments/799897234128764958/804020431576105000/Daco_3568543.png')
+        .setAuthor(`Automatic Scoring: Score Request [#${gameNumber}]`, Constants.BRANDING_URL)
         .addField('Team 1', Team1Scores)
         .addField('Team 2', Team2Scores)
         .addField('Winning Team', `\`•\`${winner}`);

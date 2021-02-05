@@ -1,3 +1,4 @@
+import { MatchAdapter, MatchInterfaces } from "challonge-ts";
 import { Collection, TextChannel } from "discord.js";
 import { createServer } from "http";
 import { ObjectId } from "mongodb";
@@ -17,7 +18,7 @@ export const devLogger = new Logger("Socket Manager (Dev)");
 
 export { logger as socketManagerLogger };
 
-const { SOCKET_KEY, NODE_ENV } = process.env;
+const { SOCKET_KEY, NODE_ENV, API_KEY } = process.env;
 
 if(!SOCKET_KEY){
     logger.error("Required environment variable SOCKET_KEY is not defined.");
@@ -72,7 +73,6 @@ io.use((socket, next) => {
         
         try {
             const result = (players[0].wins ?? 0) - game.teamPlayers[0]![0].wins;
-            const comparisonPoint = result === 1 ? 0:players.length/2;
             const bedBreakers = players.filter(p => p.bedstreak !== 0).map(player => player.discord);
             let indexes: number[] = [];
             bedBreakers.forEach(bb => {
@@ -99,9 +99,51 @@ io.use((socket, next) => {
 
                 _players.find({ "minecraft.name": player.minecraft.name }).replaceOne(player);
             });
+
+            let scores: string = '';
+            let player1: number = -1;
+            let player2: number = -1;
+
+            await MatchAdapter.show(API_KEY!, game.URL, game.chID).then((response) => {
+                const match = response as unknown as { match: MatchInterfaces.matchResponseObject }
+                scores = match.match.scores_csv.split(',')[0];
+                player1 = match.match.player1_id;
+                player2 = match.match.player2_id;
+            })
+            let finalScores: number[] = scores.split('-').map(score => parseInt(score));
+            finalScores[result === 1? 0:1] += 1;
+            if(finalScores[0] === 2) {
+                await MatchAdapter.update(API_KEY!, game.URL, game.chID, {
+                    "match": {
+                        "scores_csv": `${finalScores[0]}-${finalScores[1]}`,
+                        "winner_id": player1
+                    }
+                });
+            }
+            else if(finalScores[1] === 2) {
+                await MatchAdapter.update(API_KEY!, game.URL, game.chID, {
+                    "match": {
+                        "scores_csv": `${finalScores[0]}-${finalScores[1]}`,
+                        "winner_id": player2
+                    }
+                });
+            }
+            else {
+                await MatchAdapter.update(API_KEY!, game.URL, game.chID, {
+                    "match": {
+                        "scores_csv": `${finalScores[0]}-${finalScores[1]}`
+                    }
+                });
+            }
+
+            const matches = (await db.tournaments.findOne({ "name": game.URL.slice(8) }))?.matches;
+            const match = matches?.find(match => match.id === game.chID);
+            if(match) match.result = [...finalScores];
+
             await Promise.all([
                 gameReport(team1scores, team2scores, game.gameNumber, (result === 1? 'Team 1':'Team 2'), users),
                 _players.execute(),
+                db.tournaments.updateOne({ "name": game.URL.slice(8) }, { $pull: { "matches": { "id": game.chID } }, $push: { "matches": match }}, { upsert: true }),
                 game.end(),
             ]);
             logger.info(`Successfully finished game ${game.id} (managed by ${bot}).`);

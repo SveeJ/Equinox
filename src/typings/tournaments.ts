@@ -19,6 +19,12 @@ export interface Tournament {
     teamIndex: number;
     /** Number of Players in a tournament */
     number_of_players: number;
+    /** Tournament State */
+    state: string;
+    /** Matches */
+    matches: TournamentMatch[];
+    /** Game Channels */
+    gameChannels: string[];
 }
 
 export interface TournamentTeam {
@@ -30,4 +36,15 @@ export interface TournamentTeam {
     teamID: number;
     /** Challonge ID */
     challongeID: number;
+}
+
+export interface TournamentMatch {
+    /** Teams */
+    teams: string[];
+    /** State */
+    matchState: string;
+    /** Result */
+    result: number[];
+    /** ID */
+    id: number;
 }

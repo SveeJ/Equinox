@@ -48,4 +48,13 @@ export namespace Constants {
 
     // Tournament Confirmation
     export const TOURNEY_CONFIRMATION_CHANNEL = '806257368010457138';
+
+    // Team Call Category
+    export const TEAM_CALL_CATEGORY = '806981198840725574';
+
+    // fClose Roles
+    export const FCLOSE_ROLES = ["804660071698268170", "736937231519842365", "805837339493924924", "804638676655145020"];
+
+    // Games Category
+    export const GAMES_CATEGORY = '807009047680909312';
 }

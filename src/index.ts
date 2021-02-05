@@ -5,7 +5,7 @@ import Logger from "./logger";
 
 const logger = new Logger("Main");
 
-import { CollectorFilter, ColorResolvable, MessageEmbed, ReactionEmoji, ReactionManager, TextChannel, User } from "discord.js";
+import { Collection, CollectorFilter, ColorResolvable, GuildMember, Message, MessageEmbed, ReactionEmoji, ReactionManager, TextChannel, User, VoiceChannel } from "discord.js";
 import https from "https";
 import fetch from "node-fetch";
 import bot, { defaultGuild } from "./managers/bot";
@@ -13,18 +13,20 @@ import database from "./managers/database";
 import { getHypixelPlayer } from "./managers/hypixel";
 import type { InteractionPayload } from "./typings/commands";
 import { Constants } from "./constants";
-import { BotManager, hasPerms, Players } from "./utils";
+import { activeGames, BotManager, createNewGame, delay, hasPerms, Player, Players } from "./utils";
 import { bots } from "./managers/socket";
 import { ObjectId } from "mongodb";
-import type { TournamentTeam } from "./typings/tournaments";
-import { TournamentAdapter, ParticipantAdapter, ParticipantInterfaces } from 'challonge-ts';
-import { create } from "domain";
+import type { TournamentMatch, TournamentTeam } from "./typings/tournaments";
+import { TournamentAdapter, ParticipantAdapter, MatchAdapter, MatchInterfaces } from 'challonge-ts';
+import { GameState } from "./typings/games";
 
 const API_KEY = process.env.API_KEY;
 if(!API_KEY) {
     logger.error("NO API KEY DEFINED");
     process.exit(1);
 }
+
+let state = false;
 
 !async function(){
 
@@ -245,6 +247,30 @@ if(!API_KEY) {
             return;
         }
 
+        else if(message.content === "=fclose" || message.content === "=forceclose"){
+
+            let perms = await hasPerms(message.member!, Constants.FCLOSE_ROLES);
+            if(message.author.id === client.user!.id) perms = true;
+
+            if(!perms) {
+                return message.channel.send(createEmbed(`${message.author} you do not have the required permissions to run this command.`, "RED", "RBW Game Management")).catch(_ => null);
+            }
+
+            const game = activeGames.find(_game => _game.textChannel?.id === message.channel.id);
+
+            if(!game) return message.channel.send(createEmbed("This channel is not bound to a currently active game.", "RED", "RBW Game Management")).catch(_ => null);
+
+            try {
+
+                const deleteChannels = await game.cancel();
+                deleteChannels();
+
+            } catch(e) {
+                logger.error(`Failed to run =fclose command:\n${e.stack}`);
+            };
+
+        }
+
         // Bot Restart
         else if(message.channel.id === Constants.BOT_RESTART_CHANNEL && message.content.startsWith('=restart') && message.content.split(' ').length > 1) {
             const bot = message.content.split(' ')[1];
@@ -339,7 +365,9 @@ if(!API_KEY) {
                             "number_of_players": number_of_players,
                             "registration": '',
                             "manager": '',
-                            "teamIndex": 1
+                            "teamIndex": 1,
+                            "state": "created",
+                            "matches": []
                         }
                     },
                     {
@@ -351,6 +379,16 @@ if(!API_KEY) {
                 if(value) return message.reply(createEmbed(`There is already an active tournament with the name ${name}. All names for active tournaments must be unique.`, "RED"));
                 
                 await message.reply(createEmbed(`Tournament → ${name} Created Successfully!`));
+
+                const data = await TournamentAdapter.create(API_KEY, {
+                    "tournament": {
+                        "name": name,
+                        "url": `equinox_${name}`,
+                        "open_signup": false,
+                        "private": true,
+                    }
+                });
+                console.log(data);
                 
                 const [ manager, register, registered ] = await Promise.all([
                     guild.channels.create(`${name} Manager`, {
@@ -382,16 +420,6 @@ if(!API_KEY) {
                         "upsert": true
                     }
                 );
-
-                const data = await TournamentAdapter.create(API_KEY, {
-                    "tournament": {
-                        "name": name,
-                        "url": `equinox_${name}`,
-                        "open_signup": false,
-                        "private": true,
-                    }
-                });
-                console.log(data);
 
                 return message.channel.send(`https://challonge.com/equinox_${name}`);
             }
@@ -435,7 +463,6 @@ if(!API_KEY) {
         // Team registration channel
         const tournament = await db.tournaments.findOne({ "registration": message.channel.id });
         if(tournament !== null) {
-            logger.info('I have reached registration.');
             if(!message.content.startsWith('=team')) return;
             const msg_arr = message.content.split(' ');
             const indexOfLastMention = msg_arr.slice(1).findIndex(msg => !msg.startsWith('<@'));
@@ -461,13 +488,13 @@ if(!API_KEY) {
             const players = await Players.getManyByDiscord(users);
             if(players.array().length !== users.length) {
                 const unregistered = users.filter(user => !players.find(u => u.discord === user));
-                return message.reply(createEmbed(`You cannot team with unregistered users. Please ask ${unregistered.map(un => `<@${un}>`).join(' ')} to register in ${guild.channels.cache.get(Constants.REGISTER_CHANNEL)?.toString()} using /register first.`));
+                return message.reply(createEmbed(`You cannot team with unregistered users. Please ask ${unregistered.map(un => `<@${un}>`).join(' ')} to register in ${guild.channels.cache.get(Constants.REGISTER_CHANNEL)?.toString()} using /register first.`, "RED"));
             }
 
             if(users.length !== tournament.number_of_players) return message.reply(createEmbed(`Invalid Usage. Please use format \`=team ${errMsg} [Team Name]\``, "RED"));
 
             const mess = await message.channel.send(users.map(u => `<@${u}>`).join(' '));
-            await mess.edit(createEmbed(`Team → ${users.map(u => `<@${u}>`).join(' ')}`).setTitle(`${team} Registration`).addField('Created By', `${message.author}`).setColor("#F6BE00"))
+            await mess.edit(createEmbed(`Team → ${users.map(u => `<@${u}>`).join(' ')}\n\nPlease ask all your teammates to react with a ✅`).setTitle(`${team} Registration`).setColor("#F6BE00"))
             .then((msg) => {
                 msg.react('✅')
                 .then(() => {
@@ -486,7 +513,7 @@ if(!API_KEY) {
                 const updatedTourney = await db.tournaments.findOne({ "registration": message.channel.id });
 
                 if(!users.includes(user.id) && user.id !== client.user!.id) {
-                    await r.users.remove(user.id);
+                    return await r.users.remove(user.id);
                 }
 
                 if(r.count! > tournament.number_of_players && r.emoji.name === '✅') {
@@ -522,7 +549,6 @@ if(!API_KEY) {
 
         const tourn = await db.tournaments.findOne({ "manager": message.channel.id }) 
         if(tourn !== null) {
-            logger.info('I have reached manager.');
             if(message.content.startsWith('=removeTeam')) {
                 const msg_arr = message.content.split(' ');
                 if(msg_arr.length !== 2) return message.reply(createEmbed("Invalid Usage. Please use format `=removeTeam [ID]`", "RED"));
@@ -545,6 +571,184 @@ if(!API_KEY) {
                 ParticipantAdapter.destroy(API_KEY, `equinox_${tourn.name}`, tourn.teams.find(team => team.teamID === id)!.challongeID);
                 return message.reply(createEmbed(`Team with ID: ${id} was deleted successfully!`)); 
             }
+            else if(message.content.startsWith('=start') && !message.content.startsWith('=startGame')) {
+                if(tourn.state !== 'started') {
+                    
+                    await TournamentAdapter.start(API_KEY, `equinox_${tourn.name}`, {
+                        "include_matches": 1,
+                    });
+
+                    await db.tournaments.updateOne({ "manager": message.channel.id }, { $set: { "state": "started" } }, { upsert: true });
+
+                    message.reply(createEmbed().setTitle(`Tournament ${tourn.name} started!`));
+
+                    await MatchAdapter.index(API_KEY, `equinox_${tourn.name}`).then(async (response) => {
+                        const matches: TournamentMatch[] = [];
+                        response.matches.forEach(async _match => {
+
+                            const match = _match as unknown as { match: MatchInterfaces.matchResponseObject }
+
+                            const team1 = tourn.teams.find(team => team.challongeID === match.match.player1_id);
+                            const team2 = tourn.teams.find(team => team.challongeID === match.match.player2_id);
+
+                            const tournamentMatch: TournamentMatch = {
+                                "id": match.match.id,
+                                "matchState": match.match.state,
+                                "result": [0, 0],
+                                "teams": [team1!.teamMembers.join(' '), team2!.teamMembers.join(' ')],
+                            }
+
+                            matches.push(tournamentMatch);
+                        })
+
+                        await db.tournaments.updateOne({ "manager": message.channel.id }, { $set: { "matches": matches } }, { upsert: true });
+                    })
+                    return guild.channels.cache.get(tourn.registration)?.delete(); 
+                }
+                return message.reply(createEmbed(undefined, "RED").setTitle(`Tournament ${tourn.name} has already started.`));
+            }
+            else if(message.content.startsWith('=matches')) {
+                if(tourn.state !== 'started') return message.reply(createEmbed('The tournament has not started as yet. Please use =start [name] to start the tournament.', "RED"));
+
+                const matches = tourn.matches;
+                matches.forEach(match => {
+                    message.reply(createEmbed(undefined, "GREEN", `${tourn.name} Matches`).setTitle(`Match ID: ${match.id}`)
+                    .addField('Team 1', `${match.teams[0].split(' ').map(mem => client.users.cache.get(mem)).join(' ')}\nScore: ${match.result[0]}`)
+                    .addField('Team 2', `${match.teams[1].split(' ').map(mem => client.users.cache.get(mem)).join(' ')}\nScore: ${match.result[1]}`)
+                    .addField('State', match.matchState));
+                });
+
+                return;
+            }
+            else if(message.content.startsWith('=startGame')) {
+                const msg_arr = message.content.split(' ');
+                if(msg_arr.length !== 2) return message.reply(createEmbed("Invalid Format. Please use \`=startGame [Match ID]\`", "RED"));
+
+                const match_id = parseInt(msg_arr[1]);
+                if(Number.isNaN(match_id)) return message.reply(createEmbed("[Match ID] must be a number.", "RED"));
+
+                const match = tourn.matches.find(match => match.id === match_id);
+                if(!match) return message.reply(createEmbed(`${match_id} is not a valid Match ID.`, "RED"));
+
+                // if(match.matchState !== 'open') return message.reply(createEmbed(`Match with ID ${match_id} is not currently open.`, "RED"));
+
+                const team1Members = match.teams[0].split(' ').map(mem => guild.members.cache.get(mem)!).filter(mem => mem);
+                if(team1Members.length !== tourn.number_of_players) return message.reply(createEmbed("Team 1 members are missing from the guild.", "RED"));
+                const team2Members = match.teams[1].split(' ').map(mem => guild.members.cache.get(mem)!).filter(mem => mem);
+                if(team2Members.length !== tourn.number_of_players) return message.reply(createEmbed("Team 2 members are missing from the guild.", "RED"));
+
+                const waiting_room = guild.channels.cache.get(Constants.WAITING_ROOM);
+                if(waiting_room?.type! !== "voice") return message.reply(createEmbed("Waiting room not found.", "RED"));
+
+                const waiting_room_members = waiting_room?.members.array();
+                if(!waiting_room_members || waiting_room_members?.length < tourn.number_of_players*2) return message.reply(createEmbed("Members are not in waiting room.", "RED"));
+
+                const gameMembers = [...team1Members, ...team2Members];
+
+                if(gameMembers.filter(mem => waiting_room_members?.map(m => m.id).includes(mem!.id)).length !== tourn.number_of_players*2) return message.reply(createEmbed("The match members are not in the waiting room. Please ensure they are all in the waiting room before starting the game.", "RED"));
+            
+                await db.tournaments.updateOne({ "manager": message.channel.id }, { $set: { "state": "started" } });
+                const game = await createNewGame();
+                const { textChannel } = await game.createChannels(gameMembers);
+
+                const { logger, id: insertedId } = game;
+                const msg = await textChannel.send(gameMembers.join(""));
+                await msg.delete({ timeout: 100 });
+
+                const [ tc1, tc2 ] = await Promise.all([
+                    guild.channels.create(`Team #1 - Match ID ${match_id}`, {
+                        type: "voice",
+                        permissionOverwrites: team1Members.map(player => ({
+                            id: player.id,
+                            allow: ["CONNECT", "SPEAK"],
+                        })),
+                        userLimit: team1Members.length,
+                        parent: Constants.TEAM_CALL_CATEGORY,
+                    }),
+                    guild.channels.create(`Team #2 - Match ID ${match_id}`, {
+                        type: "voice",
+                        permissionOverwrites: team2Members.map(player => ({
+                            id: player.id,
+                            allow: ["CONNECT", "SPEAK"],
+                        })),
+                        userLimit: team2Members.length,
+                        parent: Constants.TEAM_CALL_CATEGORY,
+                    })
+                ]);
+
+                game.setTeamChannels(tc1, tc2);
+                game.setChallongeInfo(match_id, `equinox_${tourn.name}`);
+
+                await game.enterStartingState();
+
+                for await (const member of team1Members) {
+                    await member?.voice.setChannel(tc1.id).catch(() => logger.info('failed to send players to teams'));
+                    await delay(200);
+                }
+
+                for await (const member of team2Members) {
+                    await member?.voice.setChannel(tc2.id).catch(() => logger.info('failed to send players to teams'));
+                    await delay(200);
+                }
+    
+                const map = await game.pickMap();
+                if(!map) throw new Error("pickMap returned nothing");
+
+                const team1: Player[] = (await Players.getManyByDiscord(team1Members.map(mem => mem.id))).array();
+                const team2: Player[] = (await Players.getManyByDiscord(team2Members.map(mem => mem.id))).array();
+            
+                let tookALongTime = false;
+                const timeout = setTimeout(() => {
+                    tookALongTime = true;
+                    textChannel.send(
+                        createEmbed("No bots are currently available to assign to this game. Please be patient.")
+                    ).catch(() => logger.info('Failed to send in No bots are available message.'));
+                }, 10000);
+    
+                game.getAssignedBot().then(async bot => {
+                    clearTimeout(timeout);
+    
+                    if(bot === 'undefined') {
+                        if(!textChannel) return;
+                        await textChannel.send(createEmbed('The maximum waiting time has been exceeded. No bots are available right now. Please try again later.', "RED"));
+                        await delay(5000);
+                        await textChannel.send('=fclose');
+                    }
+    
+                    textChannel.send(
+                        createEmbed(
+                            tookALongTime
+                            ? `We're sorry for the delay. The bot **${bot}** has been assigned to your game.`
+                            : `The bot **${bot}** has been assigned to your game.`
+                        )
+                    ).catch(() => logger.info('Failed to create `sorry for delay embed.`'));
+                    if(game.state === GameState.VOID){
+                        tc1.delete().catch(() => logger.info("Failed to delete tc1"));
+                        tc2.delete().catch(() => logger.info("Failed to delete tc2"));
+                        return;
+                    }
+                    logger.info(JSON.stringify(bots) + `, size → ${bots.size}`);
+                    const _bot = bots.get(bot);
+                    if(!_bot){
+                        textChannel.send(createEmbed(`Failed to bind to **${bot}**.`)).catch(() => logger.info("Failed to send 'Failed to bind bot message.'"));
+                        BotManager.release(bot);
+                        return game.cancel();
+                    }
+                    logger.info(`Sending data: ${JSON.stringify([...team1.map(player => player.toJSON()), ...team2.map(player => player.toJSON())])}`);
+                    _bot.once("gameCancel", async () => {
+                        try {
+                            setTimeout(await game.cancel(), 10000);
+                        } catch(e){
+                            logger.error(`Bot failed to cancel game:\n${e.stack}`);
+                        }
+                    });
+                    _bot.emit("gameStart", {
+                        players: [...team1.map(player => player.toJSON()), ...team2.map(player => player.toJSON())],
+                        map,
+                    });
+                    game.start(team1, team2);
+                });
+            }
         }
 
         // Team registered channel
@@ -558,7 +762,7 @@ if(!API_KEY) {
                 })
 
                 const filter: CollectorFilter = (reaction) => {
-                return reaction.emoji.name === '✅' || reaction.emoji.name === '❌';
+                return (reaction.emoji.name === '✅' || reaction.emoji.name === '❌') && !state;
             };
 
             const collector = message.createReactionCollector(filter, { time: 0 });
@@ -566,10 +770,16 @@ if(!API_KEY) {
 
             collector.on('collect', async r => {
 
-                if(r.count! > 1 && r.emoji.name === '✅') {
+                if(r.count! === 2 && r.emoji.name === '✅') {
+                    
+                    state = true;
 
                     const updatedTourney = await db.tournaments.findOne({ "registered": message.channel.id });
                     if(!updatedTourney) return;
+                    if(updatedTourney.state === 'started') {
+                        r.message.channel.send(createEmbed(`This tournament has already started.`, 'RED'));
+                        return collector.stop();
+                    }
 
                     const registered: string[] = [];
                     updatedTourney?.teams.forEach(team => registered.push(...team.teamMembers));
@@ -615,14 +825,16 @@ if(!API_KEY) {
                         await message.edit(users.map(u => `<@${u}>`).join(' '));
                         await message.edit(message.embeds[0].setTitle(`${name} Registration → Successful`).setColor("GREEN").setFooter(`© Equinox | Team ID: ${updatedTourney.teamIndex}`));
                         await r.message.reactions.removeAll();
+                        collector.stop();
                     }
-                    collector.stop();
                 }
-                else if(r.count! > 1 && r.emoji.name === '❌') {
+                else if(r.count! === 2 && r.emoji.name === '❌') {
+                    state = true;
                     await message.edit(message.embeds[0].setTitle(`${name} Registration → Denied`).setColor("RED"));
                     await r.message.reactions.removeAll();
                     collector.stop();
                 }
+                state = false;
             });
             return;
         }
