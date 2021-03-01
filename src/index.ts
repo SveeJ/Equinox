@@ -603,7 +603,7 @@ let state = false;
 
                         await db.tournaments.updateOne({ "manager": message.channel.id }, { $set: { "matches": matches } }, { upsert: true });
                     })
-                    return guild.channels.cache.get(tourn.registration)?.delete(); 
+                    return guild.channels.cache.get(tourn.registration)?.delete().catch(() => null); 
                 }
                 return message.reply(createEmbed(undefined, "RED").setTitle(`Tournament ${tourn.name} has already started.`));
             }
@@ -620,7 +620,7 @@ let state = false;
 
                 return;
             }
-            else if(message.content.startsWith('=startGame')) {
+            else if(message.content.toLowerCase().startsWith('=startgame')) {
                 const msg_arr = message.content.split(' ');
                 if(msg_arr.length !== 2) return message.reply(createEmbed("Invalid Format. Please use \`=startGame [Match ID]\`", "RED"));
 

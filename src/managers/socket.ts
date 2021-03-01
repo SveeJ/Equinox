@@ -112,25 +112,19 @@ io.use((socket, next) => {
 
             await MatchAdapter.show(API_KEY!, game.URL, game.chID).then((response) => {
                 const match = response as unknown as { match: MatchInterfaces.matchResponseObject }
-                scores = match.match.scores_csv.split(',')[0];
+                scores = match.match.scores_csv;
                 player1 = match.match.player1_id;
                 player2 = match.match.player2_id;
             })
-            let finalScores: number[] = scores.split('-').map(score => parseInt(score));
+            let finalScores: number[] = scores === ''? [0, 0]:scores.split('-').map(score => parseInt(score));
             finalScores[result === 1? 0:1] += 1;
-            if(finalScores[0] === 2) {
+
+            if(finalScores.includes(2)) {
+                const win_id = finalScores[0] === 2?player1:player2;
                 await MatchAdapter.update(API_KEY!, game.URL, game.chID, {
                     "match": {
                         "scores_csv": `${finalScores[0]}-${finalScores[1]}`,
-                        "winner_id": player1
-                    }
-                });
-            }
-            else if(finalScores[1] === 2) {
-                await MatchAdapter.update(API_KEY!, game.URL, game.chID, {
-                    "match": {
-                        "scores_csv": `${finalScores[0]}-${finalScores[1]}`,
-                        "winner_id": player2
+                        "winner_id": win_id
                     }
                 });
             }
