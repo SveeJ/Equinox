@@ -65,12 +65,14 @@ io.use((socket, next) => {
         // Continue handling the event
         if(process.env.NODE_ENV === "development") devLogger.info(`Received payload: ${JSON.stringify(players)}`);
         const _game = await BotManager.getAssignedGame(bot);
+        logger.info('reached1');
         if(!_game) return logger.warn(`Received gameFinish event from bot ${bot} that is not currently bound to a game. Ignoring invocation.`);
         const game = activeGames.get(_game);
         if(!game) return logger.warn(`Received gameFinish event from bot ${bot} that is not currently bound to game ${_game} that does not exist. Ignoring invocation.`);
         if(game.state !== GameState.ACTIVE && game.state !== GameState.SCORING) 
         return logger.warn(`Received gameFinish event from bot ${bot} that is not currently bound to game ${game.id} which is not currently open to scoring modifications. Ignoring invocation.`);
-        
+        logger.info('reached2');
+
         try {
             const result = (players[0].wins ?? 0) - game.teamPlayers[0]![0].wins;
             const bedBreakers = players.filter(p => p.bedstreak !== 0).map(player => player.discord);
@@ -87,6 +89,8 @@ io.use((socket, next) => {
             let team2scores = '';
             let users = '';
 
+            logger.info('reached3');
+
             players.forEach((player, _i) => {
                 player.games = (player.games ?? 0) + 1;
                 player._id = new ObjectId(player._id);
@@ -99,6 +103,8 @@ io.use((socket, next) => {
 
                 _players.find({ "minecraft.name": player.minecraft.name }).replaceOne(player);
             });
+
+            logger.info('reached4');
 
             let scores: string = '';
             let player1: number = -1;
